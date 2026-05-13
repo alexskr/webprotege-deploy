@@ -1,0 +1,75 @@
+# =============================================================================
+# WebProtege staging / production overlay
+# =============================================================================
+#
+# Compose layer that hardens the dev-oriented base file for deployments
+# behind an externally managed TLS-terminating nginx (e.g. puppet + letsencrypt
+# on the host).  Bring up with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --env-file .env.staging up -d
+#
+# Requires Docker Compose v2.24+ for the `!reset` / `!override` tags.
+# Fallback for older Compose: replace `!reset []` with `[]` and drop the
+# `!override` tag (Compose v2.20+).
+#
+# What this overlay does, relative to docker-compose.yml:
+#   1. Drops every host port binding except the internal nginx — so mongo,
+#      rabbitmq, keycloak, minio, mailpit, and the Java JDWP debug ports are
+#      reachable only inside the docker bridge.
+#   2. Rebinds the internal nginx to ${WEBPROTEGE_HTTP_BIND:-127.0.0.1}:
+#      ${WEBPROTEGE_HTTP_PORT:-8080}, so the host nginx can proxy_pass to
+#      it without exposing the stack publicly.
+#   3. Force-fails startup if KEYCLOAK_ADMIN_PASSWORD, MINIO_ROOT_PASSWORD,
+#      or ADMIN_CLI_SECRET are missing (no silent fallback to dev defaults).
+#
+# Notes:
+# - The X-Forwarded-Proto fix lives in the ghcr.io/alexskr/webprotege-nginx
+#   image set in the base compose; no config-file mount is needed here.
+# - mailpit stays running on the bridge because Keycloak's realm JSON
+#   points at mailpit:1025; it's just unreachable from the host.  Real
+#   SMTP relay integration is tracked as a follow-up issue.
+
+services:
+
+  mongo:
+    ports: !reset []
+
+  rabbitmq:
+    ports: !reset []
+
+  webprotege-keycloak:
+    ports: !reset []
+    environment:
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?must be set in env file}
+
+  minio:
+    ports: !reset []
+    environment:
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?must be set in env file}
+
+  webprotege-gwt-api-gateway:
+    ports: !reset []
+
+  webprotege-gwt-ui-server:
+    ports: !reset []
+
+  webprotege-authorization-service:
+    ports: !reset []
+
+  webprotege-event-history-service:
+    ports: !reset []
+
+  webprotege-backend-service:
+    ports: !reset []
+
+  webprotege-user-management-service:
+    environment:
+      webprotege.keycloak.clientSecret: ${ADMIN_CLI_SECRET:?must be set in env file}
+
+  webprotege-nginx:
+    ports: !override
+      - "${WEBPROTEGE_HTTP_BIND:-127.0.0.1}:${WEBPROTEGE_HTTP_PORT:-8080}:80"
+
+  mailpit:
+    ports: !reset []

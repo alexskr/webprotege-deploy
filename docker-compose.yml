@@ -53,7 +53,7 @@ services:
       # https://github.com/protegeproject/webprotege-keycloak/issues/6.
       test:
         - CMD-SHELL
-        - '/opt/keycloak/bin/kcadm.sh get realms/webprotege --fields "attributes(frontendUrl)" --server "http://localhost:8080$${KC_HTTP_RELATIVE_PATH:-}" --realm master --user "$$KEYCLOAK_ADMIN" --password "$$KEYCLOAK_ADMIN_PASSWORD" | grep -q ''"frontendUrl" : "http://${SERVER_HOST}/keycloak"'''
+        - '/opt/keycloak/bin/kcadm.sh get realms/webprotege --fields "attributes(frontendUrl)" --server "http://localhost:8080$${KC_HTTP_RELATIVE_PATH:-}" --realm master --user "$$KEYCLOAK_ADMIN" --password "$$KEYCLOAK_ADMIN_PASSWORD" | grep -q ''"frontendUrl" : "${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak"'''
       interval: 5s
       timeout: 5s
       retries: 60
@@ -95,16 +95,16 @@ services:
       webprotege.minio.accessKey: ${MINIO_ROOT_USER:-webprotege}
       webprotege.minio.secretKey: ${MINIO_ROOT_PASSWORD:-webprotege}
       webprotege.minio.endPoint: http://minio:9000
-      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_ISSUER_URI: http://${SERVER_HOST}/keycloak/realms/webprotege
-      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_AUTHORIZATION_URI: http://${SERVER_HOST}/keycloak/realms/webprotege/protocol/openid-connect/auth
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_ISSUER_URI: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak/realms/webprotege
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_AUTHORIZATION_URI: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak/realms/webprotege/protocol/openid-connect/auth
       SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_TOKEN_URI: http://webprotege-keycloak:8080/keycloak/realms/webprotege/protocol/openid-connect/token
       SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_JWK_SET_URI: http://webprotege-keycloak:8080/keycloak/realms/webprotege/protocol/openid-connect/certs
       SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_USER_INFO_URI: http://webprotege-keycloak:8080/keycloak/realms/webprotege/protocol/openid-connect/userinfo
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://${SERVER_HOST}/keycloak/realms/webprotege
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak/realms/webprotege
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://webprotege-keycloak:8080/keycloak/realms/webprotege/protocol/openid-connect/certs
       spring.servlet.multipart.max-file-size: 300MB
       spring.servlet.multipart.max-request-size: 300MB
-      WEBPROTEGE_ALLOWEDORIGIN: http://${SERVER_HOST}
+      WEBPROTEGE_ALLOWEDORIGIN: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}
       webprotege.rabbit.timeout: 600000
       _JAVA_OPTIONS: ${ENABLE_JAVA_DEBUG:+-Xdebug -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5008}
     logging:
@@ -131,12 +131,12 @@ services:
       minio.access.key: ${MINIO_ROOT_USER:-webprotege}
       minio.access.secret: ${MINIO_ROOT_PASSWORD:-webprotege}
       minio.endPoint: http://minio:9000
-      KEYCLOAK_AUTH_URL: http://${SERVER_HOST}/keycloak/
+      KEYCLOAK_AUTH_URL: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak/
       webprotege.gwt-api-gateway.endPoint: http://webprotege-gwt-api-gateway:7777
-      webprotege.websocketUrl: ws://${SERVER_HOST}/wsapps
-      webprotege.logoutUrl: http://${SERVER_HOST}/webprotege/logout
-      webprotege.fileUploadurl: http://${SERVER_HOST}
-      webprotege.keycloakLogoutUrl: http://${SERVER_HOST}/keycloak/realms/webprotege/protocol/openid-connect/logout
+      webprotege.websocketUrl: ${PUBLIC_WS_SCHEME:-ws}://${SERVER_HOST}/wsapps
+      webprotege.logoutUrl: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/webprotege/logout
+      webprotege.fileUploadurl: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}
+      webprotege.keycloakLogoutUrl: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak/realms/webprotege/protocol/openid-connect/logout
       webprotege.rabbit.timeout: 300000
       JDK_JAVA_OPTIONS: --add-opens java.base/sun.net=ALL-UNNAMED
       _JAVA_OPTIONS: ${ENABLE_JAVA_DEBUG:+-Xdebug -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006}
@@ -187,7 +187,7 @@ services:
     environment:
       JDK_JAVA_OPTIONS: --add-opens java.base/sun.net=ALL-UNNAMED
       SPRING_DATA_MONGODB_URI: "${MONGO_URL}"
-      webprotege.keycloak.serverUrl: http://${SERVER_HOST}/keycloak
+      webprotege.keycloak.serverUrl: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak
       webprotege.keycloak.clientSecret: ${ADMIN_CLI_SECRET}
       webprotege.keycloak.clientId: user-management
       LOGGING_LEVEL_ROOT: INFO
@@ -209,7 +209,7 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      webprotege.keycloak.serverUrl: http://${SERVER_HOST}/keycloak
+      webprotege.keycloak.serverUrl: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak
       LOGGING_LEVEL_ROOT: INFO
       LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB_CORE_MONGOTEMPLATE: INFO
       LOGGING_LEVEL_ORG_MONGODB_DRIVER: INFO
@@ -296,7 +296,12 @@ services:
     - webprotege-data-directory:/srv/webprotege
 
   webprotege-nginx:
-    image: protegeproject/webprotege-nginx:2.0.2
+    # Forked image with X-Forwarded-Proto trust so an external TLS-terminating
+    # nginx (puppet/letsencrypt) can front the stack.  Backward-compatible
+    # with the upstream behaviour when no X-Forwarded-Proto header is sent
+    # (dev case).  Swap back to protegeproject/webprotege-nginx once the
+    # upstream PR with the same fix is merged and released.
+    image: ghcr.io/alexskr/webprotege-nginx:2.0.3
     hostname: ${SERVER_HOST}
     ports:
       - 80:80
