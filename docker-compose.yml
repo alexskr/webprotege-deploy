@@ -25,7 +25,14 @@ services:
 
 
   webprotege-keycloak:
-    image: protegeproject/webprotege-keycloak:2.0.1
+    # Forked image with PUBLIC_SCHEME support in the entrypoint so the realm's
+    # frontendUrl and the webprotege client's redirect URIs match the public
+    # scheme (https when behind a TLS-terminating reverse proxy).  Without
+    # this the OIDC discovery doc advertises http:// endpoints to back-channel
+    # callers and Spring's issuer-uri validation fails in webprotege-gwt-api-
+    # gateway.  Swap back to protegeproject/webprotege-keycloak once the
+    # upstream PR with the same fix ships.
+    image: ghcr.io/alexskr/webprotege-keycloak:2.0.2
     ports:
       - 8080:8080
     depends_on:
@@ -33,24 +40,29 @@ services:
         condition: service_healthy
     environment:
       KC_PROXY_HEADERS: xforwarded
-      KC_HOSTNAME: ${SERVER_HOST}
+      # Full-URL form: tells Keycloak the public base URL including scheme,
+      # so URLs it generates from the bridge network (where no X-Forwarded-*
+      # headers are present) still use the correct scheme.  The realm-level
+      # frontendUrl patched by the entrypoint provides defense in depth.
+      KC_HOSTNAME: ${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_RELATIVE_PATH: /keycloak
       KC_HTTP_ENABLED: "true"
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-password}
       SERVER_HOST: ${SERVER_HOST}
+      PUBLIC_SCHEME: ${PUBLIC_SCHEME:-http}
       KC_LOG_LEVEL: ${KC_LOG_LEVEL:-INFO}
-      KC_FEATURES: hostname
     volumes:
       - keycloak-h2-directory:/opt/keycloak/data
     healthcheck:
       # Verify the realm's frontendUrl has been patched by entrypoint.sh to
-      # match SERVER_HOST, not just that the realm exists.  Without the
-      # frontendUrl check the healthcheck can pass in the window between
-      # realm import and the entrypoint's kcadm patch, during which
-      # Keycloak serves stale discovery documents.  Tracked upstream in
-      # https://github.com/protegeproject/webprotege-keycloak/issues/6.
+      # match ${PUBLIC_SCHEME}://${SERVER_HOST}/keycloak — not just that the
+      # realm exists.  Without the frontendUrl check the healthcheck can
+      # pass in the window between realm import and the entrypoint's kcadm
+      # patch, during which Keycloak serves stale discovery documents.  Uses
+      # kcadm rather than curl because the Keycloak base image (RHEL UBI)
+      # ships neither curl nor wget.
       test:
         - CMD-SHELL
         - '/opt/keycloak/bin/kcadm.sh get realms/webprotege --fields "attributes(frontendUrl)" --server "http://localhost:8080$${KC_HTTP_RELATIVE_PATH:-}" --realm master --user "$$KEYCLOAK_ADMIN" --password "$$KEYCLOAK_ADMIN_PASSWORD" | grep -q ''"frontendUrl" : "${PUBLIC_SCHEME:-http}://${SERVER_HOST}/keycloak"'''
