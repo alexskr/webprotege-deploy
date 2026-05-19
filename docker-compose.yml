@@ -157,6 +157,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    volumes:
+      # Patched Tomcat server.xml that adds a RemoteIpValve so
+      # request.getScheme() honours X-Forwarded-Proto from the upstream
+      # nginx — needed for the legacy Keycloak Java adapter to construct
+      # redirect_uri with the public https scheme.
+      - ./tomcat-server.xml:/usr/local/tomcat/conf/server.xml:ro
     networks:
       - webprotege
 
