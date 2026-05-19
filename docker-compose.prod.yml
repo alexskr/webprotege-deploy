@@ -50,6 +50,7 @@ services:
 
   webprotege-gwt-api-gateway:
     ports: !reset []
+    extra_hosts: !reset []
 
   webprotege-gwt-ui-server:
     ports: !reset []
@@ -68,6 +69,9 @@ services:
       webprotege.keycloak.clientSecret: ${ADMIN_CLI_SECRET:?must be set in env file}
 
   webprotege-nginx:
+    # Override the dev-oriented hostname so it does not shadow public DNS
+    # for sibling containers on this user-defined bridge.
+    hostname: webprotege-nginx-internal
     ports: !override
       - "${WEBPROTEGE_HTTP_BIND:-127.0.0.1}:${WEBPROTEGE_HTTP_PORT:-8080}:80"
 
