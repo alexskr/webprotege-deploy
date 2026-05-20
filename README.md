@@ -60,18 +60,23 @@ See `.env.example` for documentation of each variable.
 
 ## Starting WebProtege
 
-Two paths — pick one:
+The default path is plain HTTP — `docker compose up -d` and go, no cert
+tooling, no setup steps.  An **optional** HTTPS layer is available for
+contributors working on auth flows, OIDC, proxy headers, WebSocket
+upgrades, or anything else that behaves differently under HTTPS; flip it
+on with one extra make target.
 
-- **HTTP (default)** — fastest first-run; no cert setup.  Use this if you
-  just want to poke around.
-- **HTTPS (recommended for any auth / OIDC work)** — mirrors the
-  TLS-terminated topology used in staging and prod, so HTTPS-only bugs
-  (cookie `Secure` flags, mixed-content, X-Forwarded-Proto handling)
-  surface in dev instead of in production.  See
-  [docs/design/https-only-dev.md](docs/design/https-only-dev.md) for the
-  full rationale.
+- **HTTP (default)** — fastest first-run, no cert setup, identical to the
+  long-standing dev flow.
+- **HTTPS (optional)** — Caddy + locally-trusted cert via
+  [mkcert](https://github.com/FiloSottile/mkcert).  Mirrors the
+  TLS-terminated topology used in staging and prod, so HTTPS-sensitive
+  behaviour (cookie `Secure` flags, mixed-content, X-Forwarded-Proto
+  handling, OIDC redirect_uri) is exercisable in dev.  See
+  [docs/design/optional-https-dev.md](docs/design/optional-https-dev.md)
+  for the full rationale.
 
-### Option A — plain HTTP (legacy / minimal)
+### Option A — plain HTTP (default)
 
 ```bash
 docker compose up -d
@@ -81,7 +86,7 @@ make dev-up
 
 Open `http://webprotege-local.edu`.
 
-### Option B — HTTPS with a locally-trusted cert (recommended)
+### Option B — HTTPS with a locally-trusted cert (optional)
 
 One-time per machine, generate a [mkcert](https://github.com/FiloSottile/mkcert)
 cert and install its CA into your system trust store:
