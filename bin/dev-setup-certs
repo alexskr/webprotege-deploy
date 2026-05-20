@@ -154,18 +154,35 @@ generate_cert() {
 
   if [[ -f "$cert" && -f "$key" && "$FORCE" -eq 0 ]]; then
     echo "[dev-setup-certs] cert + key already present at ./certs/ — use --force to regenerate."
-    return
+  else
+    echo "[dev-setup-certs] Generating cert for ${SERVER_HOST} (+ localhost, 127.0.0.1)..."
+    # -cert-file / -key-file write to specific paths regardless of SAN list.
+    mkcert -cert-file "$cert" -key-file "$key" \
+      "$SERVER_HOST" localhost 127.0.0.1 ::1
+
+    echo
+    echo "[dev-setup-certs] Wrote:"
+    echo "    $cert"
+    echo "    $key"
   fi
 
-  echo "[dev-setup-certs] Generating cert for ${SERVER_HOST} (+ localhost, 127.0.0.1)..."
-  # -cert-file / -key-file write to specific paths regardless of SAN list.
-  mkcert -cert-file "$cert" -key-file "$key" \
-    "$SERVER_HOST" localhost 127.0.0.1 ::1
-
-  echo
-  echo "[dev-setup-certs] Wrote:"
-  echo "    $cert"
-  echo "    $key"
+  # Always copy the mkcert local CA into ./certs/ alongside the leaf cert.
+  # The CA is needed by JVM-based services in the stack (api-gateway,
+  # user-management, event-history) so they can validate the cert Caddy
+  # presents when they do back-channel HTTPS to the public hostname.
+  # mkcert's CAROOT location is platform-specific (~/Library/Application
+  # Support/mkcert on macOS, ~/.local/share/mkcert on Linux, etc.) —
+  # copying into ./certs/ gives the compose mounts a stable path.
+  local ca_root ca_src ca_dst="${CERTS_DIR}/rootCA.pem"
+  ca_root="$(mkcert -CAROOT 2>/dev/null)"
+  ca_src="${ca_root}/rootCA.pem"
+  if [[ -f "$ca_src" ]]; then
+    cp -f "$ca_src" "$ca_dst"
+    chmod 644 "$ca_dst"
+    echo "    $ca_dst  (mkcert root CA — used by JVM truststores)"
+  else
+    echo "[dev-setup-certs] WARNING: could not locate mkcert rootCA.pem at ${ca_src}"
+  fi
 }
 
 # -----------------------------------------------------------------------------

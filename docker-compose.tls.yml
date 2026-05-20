@@ -49,7 +49,12 @@ services:
       # override.  See caddy/Caddyfile header for the matrix.
       CADDY_HTTPS_SITE: ${CADDY_HTTPS_SITE:-${SERVER_HOST:-webprotege-local.edu}}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem}
-      CADDY_LETSENCRYPT_EMAIL: ${CADDY_LETSENCRYPT_EMAIL:-}
+      # Default must be non-empty: Caddyfile `{$VAR:default}` substitution
+      # only uses the default when VAR is *unset*, not when it's set-but-empty.
+      # Passing an empty value here would cause Caddy to barf on `email \n`
+      # in the Caddyfile.  Real prod deployments override this with an ops
+      # contact address so letsencrypt expiry reminders go somewhere useful.
+      CADDY_LETSENCRYPT_EMAIL: ${CADDY_LETSENCRYPT_EMAIL:-dev-noreply@example.invalid}
       CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
     depends_on:
       - webprotege-nginx
@@ -69,6 +74,99 @@ services:
   # rebinds to 127.0.0.1:8080).
   webprotege-nginx:
     ports: !reset []
+
+  # --------------------------------------------------------------------------
+  # JVM truststore: import mkcert (or any locally-trusted) root CA at
+  # container start so back-channel HTTPS calls to the public hostname pass
+  # JVM cert validation.  Applies to services that fetch the OIDC discovery
+  # doc, talk to Keycloak's admin API, etc.
+  #
+  # The shared `caddy-ca-importer` anchor below wraps the original image
+  # entrypoint with a keytool import step.  In LB-fronted prod with a real
+  # letsencrypt cert the JVM trusts it out of the box, so this overlay
+  # isn't used there.  In single-host prod with Caddy + auto-letsencrypt
+  # the JVM also trusts the real LE cert — so the CA mount is a no-op
+  # (rootCA.pem won't exist) and the keytool step skips itself.
+  # --------------------------------------------------------------------------
+
+  # extra_hosts on all four JVM services: webprotege-local.edu doesn't have
+  # real public DNS, so the container's bridge-internal resolver can't find
+  # it.  Map to host-gateway (= host's docker0 IP) so back-channel HTTPS
+  # fetches reach Caddy on the host's :443.  In LB-fronted prod where the
+  # public hostname has real DNS this overlay isn't applied, so no
+  # extra_hosts override there.
+  webprotege-gwt-api-gateway:
+    extra_hosts:
+      - "${SERVER_HOST:-webprotege-local.edu}:host-gateway"
+    volumes:
+      - ./certs/rootCA.pem:/etc/mkcert-rootCA.pem:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -s /etc/mkcert-rootCA.pem ]; then
+          keytool -importcert -trustcacerts -noprompt \
+            -keystore "$$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit \
+            -alias mkcert-dev \
+            -file /etc/mkcert-rootCA.pem 2>&1 | grep -v 'already exists' || true
+        fi
+        exec java -jar /webprotege-gwt-api-gateway.jar
+
+  # gwt-ui-server runs the legacy Keycloak Tomcat adapter, which fetches the
+  # OIDC discovery doc from the public hostname on first request — same JVM
+  # trust path as the Spring services.
+  webprotege-gwt-ui-server:
+    extra_hosts:
+      - "${SERVER_HOST:-webprotege-local.edu}:host-gateway"
+    volumes:
+      - ./certs/rootCA.pem:/etc/mkcert-rootCA.pem:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -s /etc/mkcert-rootCA.pem ]; then
+          keytool -importcert -trustcacerts -noprompt \
+            -keystore "$$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit \
+            -alias mkcert-dev \
+            -file /etc/mkcert-rootCA.pem 2>&1 | grep -v 'already exists' || true
+        fi
+        exec catalina.sh run
+
+  webprotege-user-management-service:
+    extra_hosts:
+      - "${SERVER_HOST:-webprotege-local.edu}:host-gateway"
+    volumes:
+      - ./certs/rootCA.pem:/etc/mkcert-rootCA.pem:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -s /etc/mkcert-rootCA.pem ]; then
+          keytool -importcert -trustcacerts -noprompt \
+            -keystore "$$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit \
+            -alias mkcert-dev \
+            -file /etc/mkcert-rootCA.pem 2>&1 | grep -v 'already exists' || true
+        fi
+        exec java --add-opens=java.management/sun.net=ALL-UNNAMED \
+          -jar /webprotege-user-management-service.jar
+
+  webprotege-event-history-service:
+    extra_hosts:
+      - "${SERVER_HOST:-webprotege-local.edu}:host-gateway"
+    volumes:
+      - ./certs/rootCA.pem:/etc/mkcert-rootCA.pem:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -s /etc/mkcert-rootCA.pem ]; then
+          keytool -importcert -trustcacerts -noprompt \
+            -keystore "$$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit \
+            -alias mkcert-dev \
+            -file /etc/mkcert-rootCA.pem 2>&1 | grep -v 'already exists' || true
+        fi
+        exec java --add-opens=java.management/sun.net=ALL-UNNAMED \
+          -jar /webprotege-events-history-service.jar
 
 volumes:
   caddy-data:

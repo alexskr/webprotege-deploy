@@ -44,18 +44,27 @@ dev-logs: ## Tail logs from the plain-HTTP dev stack.
 dev-certs: ## One-time per machine: install mkcert + generate locally-trusted certs.
 	bin/dev-setup-certs
 
+# PUBLIC_SCHEME / PUBLIC_WS_SCHEME get baked into every URL the backend
+# emits (issuer URI, allowed CORS origin, websocket URL, etc.) at compose-
+# parse time.  Shell env wins over .env in compose interpolation, so
+# overriding here flips the whole stack to https/wss without the user
+# having to edit .env.  Apply the same overrides on -down and -logs so
+# compose resolves the same service set (otherwise it warns about
+# orphaned services).
+HTTPS_ENV := PUBLIC_SCHEME=https PUBLIC_WS_SCHEME=wss
+
 dev-https-up: ## Bring up the stack with Caddy + mkcert TLS in front.
 	@if [ ! -f certs/cert.pem ]; then \
 		echo "ERROR: certs/cert.pem not found — run 'make dev-certs' first."; \
 		exit 1; \
 	fi
-	$(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) up -d
+	$(HTTPS_ENV) $(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) up -d
 
 dev-https-down: ## Stop + remove the HTTPS dev stack.
-	$(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) down
+	$(HTTPS_ENV) $(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) down
 
 dev-https-logs: ## Tail logs from the HTTPS dev stack (including Caddy).
-	$(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) logs -f
+	$(HTTPS_ENV) $(COMPOSE) -f $(BASE_FILE) -f $(TLS_FILE) logs -f
 
 # ----------------------------------------------------------------------------
 # Prod — typically run on the deploy host, not on a contributor's laptop.
