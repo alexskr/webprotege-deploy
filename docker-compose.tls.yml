@@ -125,6 +125,16 @@ services:
   # --------------------------------------------------------------------------
 
   webprotege-gwt-api-gateway:
+    # Use the alexskr fork image that has the webprotege-local.edu defaults
+    # removed from BOOT-INF/classes/application.yaml.  Without this image the
+    # env-var null overrides below silently fall back to the jar's hardcoded
+    # http://webprotege-local.edu/keycloak/... issuer-uri and the boot-time
+    # discovery fetch fails.  Tracks alexskr/webprotege-gwt-api-gateway branch
+    # feature/remove-hardcoded-url-defaults; upstream fix is being driven via
+    # protegeproject/webprotege-gwt-api-gateway#45 (once merged + released
+    # upstream, this image override can be removed and the base compose
+    # tag-bumped to the upstream version that ships the fix).
+    image: ghcr.io/alexskr/webprotege-gwt-api-gateway:feature-remove-hardcoded-url-defaults
     environment:
       # Skip Spring's boot-time OIDC discovery doc fetch.  YAML `~` (null)
       # in compose results in the variable being *unset* in the container,
@@ -132,6 +142,11 @@ services:
       # ClientRegistrations.fromIssuerLocation as "issuer cannot be empty".
       SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_ISSUER_URI: ~
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ~
+      # With issuer-uri unset, Spring no longer derives redirect-uri from the
+      # discovery doc, so set it explicitly to the standard Spring template
+      # ({baseUrl}/login/oauth2/code/{registrationId} — resolved per-request
+      # against the public scheme/host via X-Forwarded-* headers).
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KEYCLOAK_REDIRECT_URI: "{baseUrl}/login/oauth2/code/{registrationId}"
 
   webprotege-gwt-ui-server:
     environment:
