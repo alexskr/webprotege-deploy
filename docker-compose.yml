@@ -32,7 +32,7 @@ services:
     # callers and Spring's issuer-uri validation fails in webprotege-gwt-api-
     # gateway.  Swap back to protegeproject/webprotege-keycloak once the
     # upstream PR with the same fix ships.
-    image: ghcr.io/alexskr/webprotege-keycloak:2.0.2
+    image: ghcr.io/alexskr/webprotege-keycloak:2.0.3
     ports:
       - 8080:8080
     depends_on:
