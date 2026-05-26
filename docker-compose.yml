@@ -320,7 +320,12 @@ services:
     # (dev case).  Swap back to protegeproject/webprotege-nginx once the
     # upstream PR with the same fix is merged and released.
     image: ghcr.io/alexskr/webprotege-nginx:2.0.3
-    hostname: ${SERVER_HOST}
+    # Note: no `hostname:` directive.  On a user-defined bridge network,
+    # Docker's embedded DNS resolves every container's `hostname` field for
+    # sibling containers — so setting this to ${SERVER_HOST} would shadow
+    # public DNS and break any service that does back-channel HTTPS to the
+    # public hostname (notably webprotege-gwt-api-gateway fetching the OIDC
+    # discovery doc).
     ports:
       - 80:80
     depends_on:

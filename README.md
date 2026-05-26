@@ -60,21 +60,63 @@ See `.env.example` for documentation of each variable.
 
 ## Starting WebProtege
 
-Start all services:
+Two paths — pick one:
+
+- **HTTP (default)** — fastest first-run; no cert setup.  Use this if you
+  just want to poke around.
+- **HTTPS (recommended for any auth / OIDC work)** — mirrors the
+  TLS-terminated topology used in staging and prod, so HTTPS-only bugs
+  (cookie `Secure` flags, mixed-content, X-Forwarded-Proto handling)
+  surface in dev instead of in production.  See
+  [docs/design/https-only-dev.md](docs/design/https-only-dev.md) for the
+  full rationale.
+
+### Option A — plain HTTP (legacy / minimal)
 
 ```bash
 docker compose up -d
+# or, equivalently:
+make dev-up
 ```
 
-Keycloak will automatically import the WebProtege realm, configure
-the protocol mappers, and set up redirect URIs on first boot.  This
-is handled by the [webprotege-keycloak](https://github.com/protegeproject/webprotege-keycloak)
+Open `http://webprotege-local.edu`.
+
+### Option B — HTTPS with a locally-trusted cert (recommended)
+
+One-time per machine, generate a [mkcert](https://github.com/FiloSottile/mkcert)
+cert and install its CA into your system trust store:
+
+```bash
+make dev-certs
+```
+
+The script installs `mkcert` if missing (printing the install command
+for your platform — it doesn't run sudo for you), runs `mkcert -install`
+to add the local CA to the system store, and generates
+`./certs/cert.pem` + `./certs/key.pem` for `webprotege-local.edu`.
+
+Then bring up the stack with the TLS overlay:
+
+```bash
+make dev-https-up
+# equivalent to:
+# docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+```
+
+This adds a Caddy sidecar in front of `webprotege-nginx`, terminates TLS
+on `:443`, and proxies plain HTTP to the rest of the stack with the
+correct `X-Forwarded-*` headers.
+
+Keycloak will automatically import the WebProtege realm, configure the
+protocol mappers, and set up redirect URIs on first boot.  This is
+handled by the
+[webprotege-keycloak](https://github.com/protegeproject/webprotege-keycloak)
 image's entrypoint script — no manual Keycloak setup is required.
 
 To follow startup progress:
 
 ```bash
-docker compose logs -f webprotege-keycloak
+make dev-logs           # or: make dev-https-logs
 ```
 
 Look for `[entrypoint] Realm configuration complete.` to confirm the
@@ -82,14 +124,18 @@ realm is ready.  Press Ctrl+C to stop following logs.
 
 ## Accessing WebProtege
 
-Open your browser and go to:
+Open your browser:
 
-```
-http://webprotege-local.edu
-```
+- Option A (HTTP):  `http://webprotege-local.edu`
+- Option B (HTTPS): `https://webprotege-local.edu`
 
 Use the custom domain (not `localhost`) to ensure proper cookie handling
 and authentication flow between WebProtege and Keycloak.
+
+If you went with Option B and the browser complains about the cert, run
+`mkcert -install` once more — the CA was probably not added to the
+trust store on the first try (some browsers need a separate trust step;
+mkcert handles this).
 
 ### Register a New User Account
 

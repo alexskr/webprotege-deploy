@@ -1,0 +1,103 @@
+# =============================================================================
+# WebProtege TLS terminator (Caddy)
+# =============================================================================
+#
+# Caddy sits in front of the in-stack `webprotege-nginx` container,
+# terminates TLS, and proxies plain HTTP to webprotege-nginx:80 with the
+# X-Forwarded-* headers downstream services expect.
+#
+# Single config supports two deployment shapes selected via env vars:
+#
+#   * Dev / single-host with locally-trusted cert (mkcert):
+#       CADDY_HTTPS_SITE=webprotege-local.edu
+#       CADDY_TLS_DIRECTIVE='tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem'
+#       CADDY_GLOBAL_OPTIONS='auto_https disable_redirects'  (optional)
+#
+#   * Single-host prod with auto-letsencrypt:
+#       CADDY_HTTPS_SITE=webprotege.example.org
+#       CADDY_TLS_DIRECTIVE=''   (let Caddy auto-issue + renew)
+#       CADDY_LETSENCRYPT_EMAIL=ops@example.org
+#
+# In LB-fronted prod (AWS ELB, GCP LB, externally managed nginx) the
+# Caddy sidecar is not deployed — the LB terminates TLS directly and the
+# tls overlay isn't included on the compose command line.
+#
+# Why these particular forwarded headers:
+#   * X-Forwarded-Proto: tells webprotege-nginx (and via its forwarding
+#     pattern, every backend that builds absolute URLs) that the original
+#     request was https.
+#   * X-Forwarded-Host / -Port: lets backends construct the right
+#     hostname:port in redirects.
+#   * Host: preserved so Keycloak's KC_HOSTNAME check sees the public
+#     hostname, not the upstream container name.
+#
+# Why the explicit websocket-related blocks:
+#   * Caddy's reverse_proxy honours Connection: upgrade by default, but
+#     we set the timeouts long enough for the GWT UI's persistent WS
+#     to /wsapps.  Without long read/write timeouts, idle WS connections
+#     get reset every 30s and the hierarchy tree stops updating.
+{
+	# Global options.  CADDY_GLOBAL_OPTIONS can override (e.g. to disable
+	# the automatic :80 redirect in dev for testing).
+	{$CADDY_GLOBAL_OPTIONS}
+
+	# Email used by Caddy when requesting letsencrypt certs.  Ignored when
+	# CADDY_TLS_DIRECTIVE points at mounted cert files (mkcert path).
+	email {$CADDY_LETSENCRYPT_EMAIL:dev-noreply@example.invalid}
+}
+
+# Main HTTPS site.  The site address determines whether Caddy attempts
+# letsencrypt automatically: bare hostname (no scheme, no port) triggers
+# auto-https; explicit `https://<host>` with a `tls` directive pointing at
+# files disables auto-issuance and uses the mounted certs.
+{$CADDY_HTTPS_SITE:webprotege-local.edu} {
+	# When CADDY_TLS_DIRECTIVE is set, it overrides Caddy's default cert
+	# behaviour (e.g. `tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem`
+	# for the mkcert dev path).  When empty, Caddy falls back to its default
+	# auto-https + auto-letsencrypt for the configured site.
+	{$CADDY_TLS_DIRECTIVE}
+
+	# Caddy's reverse_proxy automatically forwards:
+	#   - Host           (original Host header)
+	#   - X-Forwarded-For    (client IP, appended)
+	#   - X-Forwarded-Proto  (set based on TLS state — "https" here)
+	#   - X-Forwarded-Host   (original Host header)
+	# So we don't need explicit header_up directives for those.
+
+	# WebSocket upgrade handler — must come before the catch-all reverse_proxy
+	# below so the upgrade headers reach the backend.  The /wsapps path is
+	# where the GWT UI opens its STOMP-over-WebSocket connection for
+	# hierarchy/event updates.
+	@websockets {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @websockets webprotege-nginx:80 {
+		# Long-lived websocket: avoid the default 30s idle timeout that
+		# would reset the GWT UI's hierarchy-event stream.
+		transport http {
+			read_timeout 24h
+			write_timeout 24h
+			dial_timeout 10s
+		}
+	}
+
+	# Everything else: standard reverse proxy.  X-Forwarded-* set automatically.
+	reverse_proxy webprotege-nginx:80
+
+	# Sensible defaults for a TLS-fronted Java stack.
+	# 300MB matches spring.servlet.multipart.max-file-size in webprotege-deploy.
+	request_body {
+		max_size 300MB
+	}
+
+	# Encode responses; pass-through for already-compressed content.
+	encode zstd gzip
+
+	# Access log to container stdout (picked up by docker logs).
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

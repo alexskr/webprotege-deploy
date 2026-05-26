@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# =============================================================================
+# WebProtege dev TLS cert generator
+# =============================================================================
+#
+# One-time-per-machine setup: ensures `mkcert` is installed, installs the
+# mkcert local CA into the system trust store, and generates a
+# locally-trusted certificate for ${SERVER_HOST} (default
+# webprotege-local.edu) into ./certs/.
+#
+# Idempotent — safe to re-run.  Re-running with --force regenerates the
+# cert even if it already exists (useful when SERVER_HOST changes).
+#
+# Browsers / JVMs / curl will trust the resulting cert because mkcert
+# installs its CA into the system trust store the first time it's run.
+#
+# Supported platforms:
+#   - macOS (mkcert installs to System keychain + Firefox profile + nss)
+#   - Linux (most distros — mkcert needs libnss3-tools on Debian/Ubuntu)
+#   - WSL on Windows (treat as Linux)
+#
+# Windows-native PowerShell is out of scope; use WSL.
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Resolve paths relative to this script so it works from any CWD.
+# -----------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CERTS_DIR="${REPO_ROOT}/certs"
+
+# -----------------------------------------------------------------------------
+# Read SERVER_HOST from .env if present, else fall back to the dev default.
+# We intentionally don't source .env (which can contain anything) — just
+# extract the one variable.
+# -----------------------------------------------------------------------------
+SERVER_HOST="$(grep -E '^SERVER_HOST=' "${REPO_ROOT}/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+SERVER_HOST="${SERVER_HOST:-webprotege-local.edu}"
+
+# -----------------------------------------------------------------------------
+# --force regenerates the cert even if files already exist on disk.
+# -----------------------------------------------------------------------------
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    -f|--force) FORCE=1 ;;
+    -h|--help)
+      cat <<EOF
+Usage: bin/dev-setup-certs [--force]
+
+  Installs mkcert (if missing) and generates locally-trusted TLS certs for
+  \${SERVER_HOST} (currently: $SERVER_HOST) into ./certs/.
+
+  --force, -f    Regenerate cert even if it already exists.
+  --help,  -h    Show this help.
+
+EOF
+      exit 0
+      ;;
+  esac
+done
+
+# -----------------------------------------------------------------------------
+# Detect platform — only used to suggest install commands when mkcert is
+# missing.  We never auto-install with sudo; the user gets a printed
+# command and runs it themselves.
+# -----------------------------------------------------------------------------
+detect_platform() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "macos"
+  elif [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    case "$ID" in
+      ubuntu|debian|linuxmint) echo "debian" ;;
+      fedora|rhel|centos|rocky|almalinux) echo "rhel" ;;
+      arch|manjaro) echo "arch" ;;
+      *) echo "linux-unknown" ;;
+    esac
+  else
+    echo "unknown"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Bail with a printed-install-instruction message if mkcert is missing.
+# We don't try to install it ourselves — installer commands need sudo and
+# we don't want to surprise-prompt the user.
+# -----------------------------------------------------------------------------
+require_mkcert() {
+  if command -v mkcert >/dev/null 2>&1; then
+    return
+  fi
+
+  local platform
+  platform=$(detect_platform)
+  echo "ERROR: mkcert not found on PATH." >&2
+  echo >&2
+  case "$platform" in
+    macos)
+      echo "  Install with:    brew install mkcert nss" >&2
+      echo "  (nss covers Firefox; the macOS keychain handles Chrome/Safari)" >&2
+      ;;
+    debian)
+      echo "  Install with:    sudo apt update && sudo apt install -y libnss3-tools mkcert" >&2
+      echo "  If mkcert isn't in your distro's package index, grab the binary from" >&2
+      echo "  https://github.com/FiloSottile/mkcert/releases" >&2
+      ;;
+    rhel)
+      echo "  Install with:    sudo dnf install -y nss-tools" >&2
+      echo "  Then grab the mkcert binary from https://github.com/FiloSottile/mkcert/releases" >&2
+      ;;
+    arch)
+      echo "  Install with:    sudo pacman -S mkcert nss" >&2
+      ;;
+    *)
+      echo "  See install instructions at https://github.com/FiloSottile/mkcert#installation" >&2
+      ;;
+  esac
+  echo >&2
+  echo "After installing, re-run: bin/dev-setup-certs" >&2
+  exit 1
+}
+
+# -----------------------------------------------------------------------------
+# Run mkcert -install if the local CA isn't already in the system store.
+# Skip silently when already done (mkcert -install is idempotent but noisy).
+# -----------------------------------------------------------------------------
+install_local_ca() {
+  # mkcert -install is idempotent; running it always is fine, but checking
+  # first lets us print a clearer message about what's happening.
+  local ca_root
+  ca_root="$(mkcert -CAROOT 2>/dev/null)"
+  if [[ -f "${ca_root}/rootCA.pem" ]]; then
+    # CA file exists — check whether it's actually trusted.  The simplest
+    # signal: mkcert -install runs cleanly with no "installed" lines on
+    # subsequent calls.  We just call it; mkcert handles the "already
+    # installed" case gracefully.
+    :
+  fi
+
+  echo "[dev-setup-certs] Ensuring mkcert local CA is installed into the system trust store..."
+  mkcert -install
+}
+
+# -----------------------------------------------------------------------------
+# Generate the cert for SERVER_HOST + localhost + 127.0.0.1.  Output
+# filenames are stable (cert.pem / key.pem) so the Caddyfile mount path
+# doesn't have to change per hostname.
+# -----------------------------------------------------------------------------
+generate_cert() {
+  mkdir -p "$CERTS_DIR"
+  local cert="${CERTS_DIR}/cert.pem"
+  local key="${CERTS_DIR}/key.pem"
+
+  if [[ -f "$cert" && -f "$key" && "$FORCE" -eq 0 ]]; then
+    echo "[dev-setup-certs] cert + key already present at ./certs/ — use --force to regenerate."
+    return
+  fi
+
+  echo "[dev-setup-certs] Generating cert for ${SERVER_HOST} (+ localhost, 127.0.0.1)..."
+  # -cert-file / -key-file write to specific paths regardless of SAN list.
+  mkcert -cert-file "$cert" -key-file "$key" \
+    "$SERVER_HOST" localhost 127.0.0.1 ::1
+
+  echo
+  echo "[dev-setup-certs] Wrote:"
+  echo "    $cert"
+  echo "    $key"
+}
+
+# -----------------------------------------------------------------------------
+# Verify /etc/hosts has the dev hostname mapping.  Not strictly required
+# (Caddy listens on any hostname Caddyfile is configured for), but a
+# missing entry is the #1 dev confusion ("why can't I reach
+# webprotege-local.edu?").
+# -----------------------------------------------------------------------------
+check_hosts_file() {
+  if grep -qE "^[^#]*\b${SERVER_HOST}\b" /etc/hosts 2>/dev/null; then
+    return
+  fi
+  echo
+  echo "[dev-setup-certs] HEADS UP: /etc/hosts has no entry for ${SERVER_HOST}."
+  echo "  Your browser won't resolve the hostname.  Add this line:"
+  echo
+  echo "    127.0.0.1  ${SERVER_HOST}"
+  echo
+  echo "  (Requires sudo to edit /etc/hosts.)"
+}
+
+# -----------------------------------------------------------------------------
+# Main.
+# -----------------------------------------------------------------------------
+require_mkcert
+install_local_ca
+generate_cert
+check_hosts_file
+
+echo
+echo "[dev-setup-certs] Done.  Bring up the stack with:"
+echo
+echo "    docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d"
+echo
+echo "  Then open https://${SERVER_HOST}/ in a browser."
